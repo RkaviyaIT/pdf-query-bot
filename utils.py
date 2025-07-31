@@ -2,17 +2,19 @@ import requests
 import tempfile
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 
-# Load models only once (globally)
+# Load embedding model (lightweight)
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-2")
-model = AutoModelForCausalLM.from_pretrained("microsoft/phi-2", torch_dtype=torch.float16, device_map="auto")
-llm = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=150)
+# Load small Q&A model
+model_name = "google/flan-t5-small"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer, max_new_tokens=128)
 
 def get_answers(pdf_url, questions):
     # Download PDF to temp file
@@ -21,7 +23,7 @@ def get_answers(pdf_url, questions):
     temp_pdf.write(response.content)
     temp_pdf.close()
 
-    # Load & split PDF
+    # Load and split PDF
     loader = PyPDFLoader(temp_pdf.name)
     docs = loader.load()
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
@@ -35,9 +37,8 @@ def get_answers(pdf_url, questions):
     for question in questions:
         relevant_docs = db.similarity_search(question, k=2)
         context = "\n".join([doc.page_content for doc in relevant_docs])
-        prompt = f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
-        response = llm(prompt)[0]["generated_text"]
-        answer = response.split("Answer:")[-1].strip()
-        answers.append(answer)
+        prompt = f"Question: {question}\nContext: {context}\nAnswer:"
+        result = llm(prompt)[0]["generated_text"]
+        answers.append(result.strip())
 
     return answers
